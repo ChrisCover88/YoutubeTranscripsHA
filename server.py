@@ -4,15 +4,26 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from typing import Dict
+import uvicorn
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 from youtube_transcript_api import YouTubeTranscriptApi
 
-# Importiert das FastMCP-Modul des offiziellen Pakets
-from mcp.server.fastmcp import FastMCP
+# Importiert die moderne MCPServer-Klasse (aus mcp 2.x)
+try:
+    from mcp.server.mcpserver import MCPServer as ServerClass
+except ImportError:
+    from mcp.server.fastmcp import FastMCP as ServerClass
 
-# Initialisiere den Server
-mcp = FastMCP("YouTube HA-Rückblick Konnektor")
+# ==========================================
+# 1. SERVER-KONFIGURATION
+# ==========================================
+PORT = int(os.environ.get("PORT", 8000))
 
-# Deine 9 definierten YouTube-Kanäle
+# Initialisiere den MCP-Server im modernen Standard
+mcp = ServerClass("YouTube HA-Rückblick Konnektor")
+
+# Deine 9 definierten YouTube-Kanäle für den wöchentlichen Rückblick
 HA_CHANNELS: Dict[str, str] = {
     "Quelle 1": "@alles-automatisch",
     "Quelle 2": "@simon42",
@@ -33,6 +44,11 @@ HEADERS = {
     'Cookie': 'CONSENT=YES+cb.20230531-07-p0.de+FX+999'
 }
 
+
+# ==========================================
+# 2. HILFSFUNKTIONEN
+# ==========================================
+
 def fetch_channel_html(handle: str) -> str:
     clean_handle = handle.strip()
     if not clean_handle.startswith("@"):
@@ -40,6 +56,7 @@ def fetch_channel_html(handle: str) -> str:
     url = f"https://www.youtube.com/{clean_handle}"
     req = urllib.request.Request(url, headers=HEADERS)
     return urllib.request.urlopen(req, timeout=12).read().decode('utf-8', errors='ignore')
+
 
 def resolve_channel_id(handle: str) -> str:
     if handle in CHANNEL_ID_CACHE:
@@ -50,6 +67,11 @@ def resolve_channel_id(handle: str) -> str:
         CHANNEL_ID_CACHE[handle] = match.group(1)
         return match.group(1)
     raise ValueError(f"Channel-ID für {handle} konnte nicht ermittelt werden.")
+
+
+# ==========================================
+# 3. MCP-WERKZEUGE FÜR CLAUDE
+# ==========================================
 
 @mcp.tool()
 def check_all_ha_channels(days: int = 7) -> str:
@@ -109,6 +131,7 @@ def check_all_ha_channels(days: int = 7) -> str:
 
     return "\n".join(report_lines)
 
+
 @mcp.tool()
 def get_video_transcript(video_id: str) -> str:
     """Liest das Transkript eines YouTube-Videos aus."""
@@ -123,6 +146,7 @@ def get_video_transcript(video_id: str) -> str:
         return f"Transkript für Video {video_id}:\n{full_text[:45000]}"
     except Exception as e:
         return f"Kein Transkript für Video-ID {video_id} abrufbar (Grund: {str(e)})."
+
 
 @mcp.tool()
 def find_channel_websites(channel_handle: str) -> str:
@@ -142,7 +166,24 @@ def find_channel_websites(channel_handle: str) -> str:
     except Exception as e:
         return f"Fehler: {str(e)}"
 
+
+# ==========================================
+# 4. START IM STREAMABLE HTTP-MODUS (/mcp)
+# ==========================================
+
+async def health_check(request):
+    """Beantwortet die Hauptseite '/' mit Status 200, um 404-Fehler zu verhindern."""
+    return JSONResponse({"status": "ok", "service": "YouTube HA-Rückblick MCP"})
+
 if __name__ == "__main__":
-    # Startet den Server im SSE-Modus auf Port und Host für Render
-    port = int(os.environ.get("PORT", 8000))
-    mcp.run(transport="sse")
+    # Erstellt die Streamable-HTTP-App für den /mcp-Endpunkt
+    if hasattr(mcp, "streamable_http_app"):
+        app = mcp.streamable_http_app()
+    else:
+        app = mcp.sse_app()
+        
+    # Fügt den Status-Check auf der Hauptseite hinzu
+    app.routes.append(Route("/", health_check))
+    
+    # Startet den Server
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
