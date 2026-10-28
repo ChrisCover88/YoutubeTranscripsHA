@@ -19,9 +19,11 @@ except ImportError:
 # 1. SERVER-KONFIGURATION
 # ==========================================
 PORT = int(os.environ.get("PORT", 8000))
+
+# Initialisiere den MCP-Server im modernen Standard
 mcp = ServerClass("YouTube HA-Rückblick Konnektor")
 
-# Deine 9 definierten YouTube-Kanäle
+# Deine 9 definierten YouTube-Kanäle für den wöchentlichen Rückblick
 HA_CHANNELS: Dict[str, str] = {
     "Quelle 1": "@alles-automatisch",
     "Quelle 2": "@simon42",
@@ -131,7 +133,7 @@ def check_all_ha_channels(days: int = 7) -> str:
 
 
 @mcp.tool()
-def get_video_transcript(video_id: str) ->str:
+def get_video_transcript(video_id: str) -> str:
     """Liest das Transkript eines YouTube-Videos aus."""
     try:
         ytt_api = YouTubeTranscriptApi()
@@ -168,15 +170,20 @@ def find_channel_websites(channel_handle: str) -> str:
 # ==========================================
 # 4. START IM STREAMABLE HTTP-MODUS (/mcp)
 # ==========================================
+
 async def health_check(request):
+    """Beantwortet die Hauptseite '/' mit Status 200, um 404-Fehler zu verhindern."""
     return JSONResponse({"status": "ok", "service": "YouTube HA-Rückblick MCP"})
 
 if __name__ == "__main__":
-    # Nutzt primär den modernen Streamable-HTTP-Endpunkt
+    # Erstellt die Streamable-HTTP-App für den /mcp-Endpunkt
     if hasattr(mcp, "streamable_http_app"):
         app = mcp.streamable_http_app()
     else:
         app = mcp.sse_app()
         
+    # Fügt den Status-Check auf der Hauptseite hinzu
     app.routes.append(Route("/", health_check))
+    
+    # Startet den Server
     uvicorn.run(app, host="0.0.0.0", port=PORT)
