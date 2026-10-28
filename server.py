@@ -7,7 +7,7 @@ from typing import Dict
 import uvicorn
 from youtube_transcript_api import YouTubeTranscriptApi
 
-# NEU: Kompatibler Import für sowohl MCP 2.x (MCPServer) als auch MCP 1.x (FastMCP)
+# Importiert die moderne MCPServer-Klasse (aus mcp 2.x)
 try:
     from mcp.server.mcpserver import MCPServer as ServerClass
 except ImportError:
@@ -17,13 +17,13 @@ except ImportError:
 # 1. SERVER-KONFIGURATION
 # ==========================================
 
-# Render übergibt den Port automatisch über die Umgebungsvariable PORT
+# Render vergibt den Port automatisch über die Umgebungsvariable PORT
 PORT = int(os.environ.get("PORT", 8000))
 
-# Initialisiere den MCP-Server
-mcp = ServerClass("YouTube HA-Rückblick Konnektor")
+# Initialisiere den MCP-Server mit Host und Port für die Cloud
+mcp = ServerClass("YouTube HA-Rückblick Konnektor", host="0.0.0.0", port=PORT)
 
-# Deine 9 definierten Quellen für den wöchentlichen Rückblick
+# Deine 9 definierten YouTube-Kanäle für den wöchentlichen Rückblick
 HA_CHANNELS: Dict[str, str] = {
     "Quelle 1": "@alles-automatisch",
     "Quelle 2": "@simon42",
@@ -36,7 +36,7 @@ HA_CHANNELS: Dict[str, str] = {
     "Quelle 9": "@CTechMedia"
 }
 
-# Zwischenspeicher für die ermittelten YouTube Channel-IDs
+# Zwischenspeicher (Cache) für die ermittelten YouTube Channel-IDs
 CHANNEL_ID_CACHE: Dict[str, str] = {}
 
 # Cookie-Consent-Header umgeht die europäische YouTube-Vorschaltseite
@@ -149,16 +149,13 @@ def check_all_ha_channels(days: int = 7) -> str:
 def get_video_transcript(video_id: str) -> str:
     """
     Liest das gesprochene Transkript (Untertitel) eines YouTube-Videos anhand der Video-ID aus.
-    Kompatibel mit youtube-transcript-api Version 1.x und 0.6.x.
     """
     try:
-        # Neue Syntax ab youtube-transcript-api Version 1.0+
         ytt_api = YouTubeTranscriptApi()
         fetched = ytt_api.fetch(video_id, languages=['de', 'en'])
         full_text = " ".join([snippet.text for snippet in fetched])
         return f"Transkript für Video {video_id}:\n{full_text[:45000]}"
     except AttributeError:
-        # Fallback für ältere Versionen
         transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['de', 'en'])
         full_text = " ".join([entry['text'] for entry in transcript_list])
         return f"Transkript für Video {video_id}:\n{full_text[:45000]}"
@@ -192,14 +189,13 @@ def find_channel_websites(channel_handle: str) -> str:
 
 
 # ==========================================
-# 4. CLOUD-SERVER STARTEN
+# 4. START MIT STREAMABLE HTTP (/mcp)
 # ==========================================
 if __name__ == "__main__":
-    # Startet den Server explizit auf Host 0.0.0.0 und dem Render-Port
+    # Startet den Server im modernen 'streamable-http' Modus unter dem Pfad /mcp
     try:
-        # Versuch 1: Über die integrierte ASGI/SSE-App mit Uvicorn starten (stabilste Methode für Cloud)
-        app = mcp.sse_app()
+        app = mcp.streamable_http_app()
         uvicorn.run(app, host="0.0.0.0", port=PORT)
-    except Exception:
-        # Fallback: Standard-Aufruf
-        mcp.run(transport="sse")
+    except AttributeError:
+        # Alternativer direkter Aufruf in MCP 2.x
+        mcp.run(transport="streamable-http")
