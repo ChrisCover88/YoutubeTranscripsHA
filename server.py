@@ -1,5 +1,6 @@
 import os
 import re
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
@@ -177,10 +178,18 @@ async def health_check(request):
 
 if __name__ == "__main__":
     # Erstellt die Streamable-HTTP-App für den /mcp-Endpunkt
-    if hasattr(mcp, "streamable_http_app"):
-        app = mcp.streamable_http_app()
-    else:
-        app = mcp.sse_app()
+    # WICHTIG: Ohne diese Einstellungen erlaubt das MCP-SDK nur Anfragen an
+    # "localhost" und beantwortet alles andere (z. B. deine Render-Adresse)
+    # mit "421 Invalid Host header" -> Claude kann den Konnektor nicht anlegen.
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+    app = mcp.streamable_http_app(
+        host="0.0.0.0",
+        stateless_http=True,      # robust bei Render-Neustarts / Schlafmodus
+        transport_security=security,
+    )
         
     # Fügt den Status-Check auf der Hauptseite hinzu
     app.routes.append(Route("/", health_check))
