@@ -1,0 +1,4 @@
+mcp
+youtube-transcript-api
+uvicorn
+starlette
