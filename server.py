@@ -6,14 +6,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict
 from youtube_transcript_api import YouTubeTranscriptApi
 
-# Importiert den modernen MCPServer
-try:
-    from mcp.server.mcpserver import MCPServer as ServerClass
-except ImportError:
-    from mcp.server.fastmcp import FastMCP as ServerClass
+# Importiert das FastMCP-Modul des offiziellen Pakets
+from mcp.server.fastmcp import FastMCP
 
 # Initialisiere den Server
-mcp = ServerClass("YouTube HA-Rückblick Konnektor")
+mcp = FastMCP("YouTube HA-Rückblick Konnektor")
 
 # Deine 9 definierten YouTube-Kanäle
 HA_CHANNELS: Dict[str, str] = {
@@ -146,5 +143,6 @@ def find_channel_websites(channel_handle: str) -> str:
         return f"Fehler: {str(e)}"
 
 if __name__ == "__main__":
-    # Startet den Server im nativen SSE-/HTTP-Modus von MCP
-    mcp.run()
+    # Startet den Server im SSE-Modus auf Port und Host für Render
+    port = int(os.environ.get("PORT", 8000))
+    mcp.run(transport="sse")
