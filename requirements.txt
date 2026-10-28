@@ -1,4 +1,9 @@
-mcp
-youtube-transcript-api
+# Fixiert das MCP-Paket auf Version 1.x, damit 'FastMCP' problemlos funktioniert
+mcp>=1.2.0,<2.0.0
+
+# Fixiert die YouTube-Transkript-Bibliothek auf die bewährte Version mit 'get_transcript'
+youtube-transcript-api==0.6.3
+
+# Webserver-Pakete für die Cloud-Bereitstellung
 uvicorn
 starlette
