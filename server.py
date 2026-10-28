@@ -5,6 +5,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from typing import Dict
 import uvicorn
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 from youtube_transcript_api import YouTubeTranscriptApi
 
 # Importiert die moderne MCPServer-Klasse (aus mcp 2.x)
@@ -20,8 +22,8 @@ except ImportError:
 # Render vergibt den Port automatisch über die Umgebungsvariable PORT
 PORT = int(os.environ.get("PORT", 8000))
 
-# Initialisiere den MCP-Server mit Host und Port für die Cloud
-mcp = ServerClass("YouTube HA-Rückblick Konnektor", host="0.0.0.0", port=PORT)
+# KORREKTUR: Nur den Namen übergeben (kein 'host' oder 'port' in MCP 2.x!)
+mcp = ServerClass("YouTube HA-Rückblick Konnektor")
 
 # Deine 9 definierten YouTube-Kanäle für den wöchentlichen Rückblick
 HA_CHANNELS: Dict[str, str] = {
@@ -189,13 +191,23 @@ def find_channel_websites(channel_handle: str) -> str:
 
 
 # ==========================================
-# 4. START MIT STREAMABLE HTTP (/mcp)
+# 4. CLOUD-SERVER STARTEN (MIT HEALTH-CHECK)
 # ==========================================
+
+async def health_check(request):
+    """Antwortet auf der Hauptseite '/' mit Status 200 OK (verhindert 404-Fehler)."""
+    return JSONResponse({"status": "ok", "service": "YouTube HA-Rückblick MCP"})
+
 if __name__ == "__main__":
-    # Startet den Server im modernen 'streamable-http' Modus unter dem Pfad /mcp
-    try:
+    # Prüft automatisch, ob die moderne Streamable-HTTP-App (/mcp) verfügbar ist,
+    # und nutzt ansonsten die bewährte SSE-App (/sse).
+    if hasattr(mcp, "streamable_http_app"):
         app = mcp.streamable_http_app()
-        uvicorn.run(app, host="0.0.0.0", port=PORT)
-    except AttributeError:
-        # Alternativer direkter Aufruf in MCP 2.x
-        mcp.run(transport="streamable-http")
+    else:
+        app = mcp.sse_app()
+        
+    # Fügt die Status-Seite unter '/' hinzu, damit Render & Claude keinen 404-Fehler sehen
+    app.routes.append(Route("/", health_check))
+    
+    # Startet den Webserver auf Host 0.0.0.0 und dem Render-Port
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
