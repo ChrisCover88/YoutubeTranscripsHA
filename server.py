@@ -3,21 +3,27 @@ import re
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict
-from mcp.server.fastmcp import FastMCP
+from typing import Dict
+import uvicorn
 from youtube_transcript_api import YouTubeTranscriptApi
+
+# NEU: Kompatibler Import für sowohl MCP 2.x (MCPServer) als auch MCP 1.x (FastMCP)
+try:
+    from mcp.server.mcpserver import MCPServer as ServerClass
+except ImportError:
+    from mcp.server.fastmcp import FastMCP as ServerClass
 
 # ==========================================
 # 1. SERVER-KONFIGURATION
 # ==========================================
 
-# Port aus der Cloud-Umgebung lesen (Standard: 8000)
+# Render übergibt den Port automatisch über die Umgebungsvariable PORT
 PORT = int(os.environ.get("PORT", 8000))
 
-# Initialisiere den MCP-Server für die Claude Cloud
-mcp = FastMCP("YouTube HA-Rückblick Konnektor", host="0.0.0.0", port=PORT)
+# Initialisiere den MCP-Server
+mcp = ServerClass("YouTube HA-Rückblick Konnektor")
 
-# Deine 9 definierten Quellen aus der Geplanten Aufgabe
+# Deine 9 definierten Quellen für den wöchentlichen Rückblick
 HA_CHANNELS: Dict[str, str] = {
     "Quelle 1": "@alles-automatisch",
     "Quelle 2": "@simon42",
@@ -30,10 +36,10 @@ HA_CHANNELS: Dict[str, str] = {
     "Quelle 9": "@CTechMedia"
 }
 
-# Cache für YouTube Channel-IDs
+# Zwischenspeicher für die ermittelten YouTube Channel-IDs
 CHANNEL_ID_CACHE: Dict[str, str] = {}
 
-# Cookie-Consent-Header umgeht die europäische YouTube-Vorschaltseite ("Before you continue")
+# Cookie-Consent-Header umgeht die europäische YouTube-Vorschaltseite
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -46,7 +52,7 @@ HEADERS = {
 # ==========================================
 
 def fetch_channel_html(handle: str) -> str:
-    """Ruft den HTML-Quelltext einer Kanalseite ab (mit Cookie-Bypass)."""
+    """Ruft den HTML-Quelltext einer YouTube-Kanalseite ab."""
     clean_handle = handle.strip()
     if not clean_handle.startswith("@"):
         clean_handle = "@" + clean_handle
@@ -70,7 +76,7 @@ def resolve_channel_id(handle: str) -> str:
 
 
 # ==========================================
-# 3. MCP-WERKZEUGE FÜR CLAUDE (Geplante Aufgabe)
+# 3. MCP-WERKZEUGE FÜR CLAUDE
 # ==========================================
 
 @mcp.tool()
@@ -119,7 +125,6 @@ def check_all_ha_channels(days: int = 7) -> str:
                         f"     Link: https://www.youtube.com/watch?v={vid_id}"
                     )
                 elif latest_outside_window is None:
-                    # Merke das neueste Video knapp außerhalb des Fensters zur Orientierung
                     latest_outside_window = f"{title} (vom {pub_dt.strftime('%d.%m.%Y')})"
 
             report_lines.append(f"--- {source_label}: {channel_title} ({handle}) ---")
@@ -143,10 +148,17 @@ def check_all_ha_channels(days: int = 7) -> str:
 @mcp.tool()
 def get_video_transcript(video_id: str) -> str:
     """
-    Liest das gesprochene Transkript (Untertitel) und die Details eines YouTube-Videos anhand der Video-ID aus.
-    Nutze dies für jedes im 7-Tage-Fenster gefundene Video, um den genauen Inhalt für Chris' Setup zu bewerten!
+    Liest das gesprochene Transkript (Untertitel) eines YouTube-Videos anhand der Video-ID aus.
+    Kompatibel mit youtube-transcript-api Version 1.x und 0.6.x.
     """
     try:
+        # Neue Syntax ab youtube-transcript-api Version 1.0+
+        ytt_api = YouTubeTranscriptApi()
+        fetched = ytt_api.fetch(video_id, languages=['de', 'en'])
+        full_text = " ".join([snippet.text for snippet in fetched])
+        return f"Transkript für Video {video_id}:\n{full_text[:45000]}"
+    except AttributeError:
+        # Fallback für ältere Versionen
         transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['de', 'en'])
         full_text = " ".join([entry['text'] for entry in transcript_list])
         return f"Transkript für Video {video_id}:\n{full_text[:45000]}"
@@ -162,7 +174,6 @@ def find_channel_websites(channel_handle: str) -> str:
     """
     try:
         html = fetch_channel_html(channel_handle)
-        # YouTube speichert externe Kanal-Links oft als 'q=https%3A%2F%2F...' Redirects oder im JSON
         raw_redirects = re.findall(r'https://www\.youtube\.com/redirect\?event=channel_description&[^\s"\'<>]+', html)
         
         found_urls = set()
@@ -181,9 +192,14 @@ def find_channel_websites(channel_handle: str) -> str:
 
 
 # ==========================================
-# 4. START ALS CLOUD-SERVER (SSE)
+# 4. CLOUD-SERVER STARTEN
 # ==========================================
 if __name__ == "__main__":
-    # Startet den Server im SSE-Modus (Server-Sent Events), 
-    # damit die Claude Cloud über eine Web-URL darauf zugreifen kann.
-    mcp.run(transport="sse")
+    # Startet den Server explizit auf Host 0.0.0.0 und dem Render-Port
+    try:
+        # Versuch 1: Über die integrierte ASGI/SSE-App mit Uvicorn starten (stabilste Methode für Cloud)
+        app = mcp.sse_app()
+        uvicorn.run(app, host="0.0.0.0", port=PORT)
+    except Exception:
+        # Fallback: Standard-Aufruf
+        mcp.run(transport="sse")
