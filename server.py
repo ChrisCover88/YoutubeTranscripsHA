@@ -18,14 +18,10 @@ except ImportError:
 # ==========================================
 # 1. SERVER-KONFIGURATION
 # ==========================================
-
-# Render vergibt den Port automatisch über die Umgebungsvariable PORT
 PORT = int(os.environ.get("PORT", 8000))
-
-# KORREKTUR: Nur den Namen übergeben (kein 'host' oder 'port' in MCP 2.x!)
 mcp = ServerClass("YouTube HA-Rückblick Konnektor")
 
-# Deine 9 definierten YouTube-Kanäle für den wöchentlichen Rückblick
+# Deine 9 definierten YouTube-Kanäle
 HA_CHANNELS: Dict[str, str] = {
     "Quelle 1": "@alles-automatisch",
     "Quelle 2": "@simon42",
@@ -38,10 +34,8 @@ HA_CHANNELS: Dict[str, str] = {
     "Quelle 9": "@CTechMedia"
 }
 
-# Zwischenspeicher (Cache) für die ermittelten YouTube Channel-IDs
 CHANNEL_ID_CACHE: Dict[str, str] = {}
 
-# Cookie-Consent-Header umgeht die europäische YouTube-Vorschaltseite
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -54,21 +48,17 @@ HEADERS = {
 # ==========================================
 
 def fetch_channel_html(handle: str) -> str:
-    """Ruft den HTML-Quelltext einer YouTube-Kanalseite ab."""
     clean_handle = handle.strip()
     if not clean_handle.startswith("@"):
         clean_handle = "@" + clean_handle
-        
     url = f"https://www.youtube.com/{clean_handle}"
     req = urllib.request.Request(url, headers=HEADERS)
     return urllib.request.urlopen(req, timeout=12).read().decode('utf-8', errors='ignore')
 
 
 def resolve_channel_id(handle: str) -> str:
-    """Ermittelt die interne YouTube Channel-ID ('UC...') für den RSS-Feed."""
     if handle in CHANNEL_ID_CACHE:
         return CHANNEL_ID_CACHE[handle]
-        
     html = fetch_channel_html(handle)
     match = re.search(r'"externalId":"(UC[a-zA-Z0-9_-]{22})"', html)
     if match:
@@ -83,11 +73,7 @@ def resolve_channel_id(handle: str) -> str:
 
 @mcp.tool()
 def check_all_ha_channels(days: int = 7) -> str:
-    """
-    Prüft alle 9 definierten YouTube-Kanäle (Quelle 1 bis 9) exakt auf neue Videos
-    innerhalb der letzten 'days' Tage (Standard: 7 Tage).
-    Liefert auch eine eindeutige Negativ-Bestätigung für Kanäle ohne neue Videos.
-    """
+    """Prüft alle 9 YouTube-Kanäle auf neue Videos der letzten Tage."""
     now_utc = datetime.now(timezone.utc)
     cutoff_utc = now_utc - timedelta(days=days)
     
@@ -133,25 +119,20 @@ def check_all_ha_channels(days: int = 7) -> str:
             if new_videos:
                 report_lines.extend(new_videos)
             else:
-                report_lines.append(
-                    f"  ❌ NEGATIV-BESTÄTIGUNG: Keine neuen Videos im {days}-Tage-Fenster gefunden."
-                )
+                report_lines.append(f"  ❌ NEGATIV-BESTÄTIGUNG: Keine neuen Videos im {days}-Tage-Fenster gefunden.")
                 if latest_outside_window:
                     report_lines.append(f"     (Letztes Video außerhalb des Fensters: {latest_outside_window})")
             report_lines.append("")
-            
         except Exception as e:
             report_lines.append(f"--- {source_label} ({handle}) ---")
-            report_lines.append(f"  ⚠️ Technisch nicht erreichbar / Fehler: {str(e)}\n")
+            report_lines.append(f"  ⚠️ Fehler: {str(e)}\n")
 
     return "\n".join(report_lines)
 
 
 @mcp.tool()
-def get_video_transcript(video_id: str) -> str:
-    """
-    Liest das gesprochene Transkript (Untertitel) eines YouTube-Videos anhand der Video-ID aus.
-    """
+def get_video_transcript(video_id: str) ->str:
+    """Liest das Transkript eines YouTube-Videos aus."""
     try:
         ytt_api = YouTubeTranscriptApi()
         fetched = ytt_api.fetch(video_id, languages=['de', 'en'])
@@ -167,47 +148,35 @@ def get_video_transcript(video_id: str) -> str:
 
 @mcp.tool()
 def find_channel_websites(channel_handle: str) -> str:
-    """
-    Untersucht den Kanal-Quelltext eines YouTube-Handles (z.B. für Quelle 4 bis 9) 
-    nach verlinkten externen Websites, Blogs, Foren oder Discord-Servern.
-    """
+    """Sucht verlinkte Websites auf der Kanalseite."""
     try:
         html = fetch_channel_html(channel_handle)
         raw_redirects = re.findall(r'https://www\.youtube\.com/redirect\?event=channel_description&[^\s"\'<>]+', html)
-        
         found_urls = set()
         for r_url in raw_redirects:
             q_match = re.search(r'[?&]q=([^&]+)', r_url)
             if q_match:
                 decoded_url = urllib.parse.unquote(q_match.group(1))
                 found_urls.add(decoded_url)
-                
         if not found_urls:
-            return f"Auf der Kanalseite von {channel_handle} konnten keine externen Website-Links extrahiert werden."
-            
+            return f"Keine externen Links für {channel_handle} gefunden."
         return f"Gefundene Links für {channel_handle}:\n" + "\n".join([f"- {u}" for u in sorted(found_urls)])
     except Exception as e:
-        return f"Fehler beim Auslesen der Links für {channel_handle}: {str(e)}"
+        return f"Fehler: {str(e)}"
 
 
 # ==========================================
-# 4. CLOUD-SERVER STARTEN (MIT HEALTH-CHECK)
+# 4. START IM STREAMABLE HTTP-MODUS (/mcp)
 # ==========================================
-
 async def health_check(request):
-    """Antwortet auf der Hauptseite '/' mit Status 200 OK (verhindert 404-Fehler)."""
     return JSONResponse({"status": "ok", "service": "YouTube HA-Rückblick MCP"})
 
 if __name__ == "__main__":
-    # Prüft automatisch, ob die moderne Streamable-HTTP-App (/mcp) verfügbar ist,
-    # und nutzt ansonsten die bewährte SSE-App (/sse).
+    # Nutzt primär den modernen Streamable-HTTP-Endpunkt
     if hasattr(mcp, "streamable_http_app"):
         app = mcp.streamable_http_app()
     else:
         app = mcp.sse_app()
         
-    # Fügt die Status-Seite unter '/' hinzu, damit Render & Claude keinen 404-Fehler sehen
     app.routes.append(Route("/", health_check))
-    
-    # Startet den Webserver auf Host 0.0.0.0 und dem Render-Port
     uvicorn.run(app, host="0.0.0.0", port=PORT)
